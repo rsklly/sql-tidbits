@@ -1,0 +1,20 @@
+-- This script is an example lateral flatten of a JSON file, taken from a fake source looking at customer satisfaction surveys. Here we will only be looking at rows where the user filled out the CSAT_score.
+-- STEP 1: Explode the '' array.
+CREATE OR REPLACE TEMP TABLE tmp_survey_raw AS
+SELECT id
+  , survey_end_time
+  , f.value::variant AS response
+from user_feedback,
+     lateral flatten(input=>response) f
+WHERE contains(f.value, 'CSAT_score')
+;
+-- STEP 2: pull out the various responses to questions.
+CREATE OR REPLACE TABLE responses_flattened AS
+SELECT id
+  , country
+  , survey_end_time
+  , response: weekly_usage_frequency::number    AS weekly_usage_frequency
+  , response: city::string                      AS city
+  , response: CSAT_score::number                AS csat_score
+  , response: comment::string                   AS csat_commenT
+FROM tmp_survey_raw;
