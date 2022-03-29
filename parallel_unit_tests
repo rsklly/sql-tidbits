@@ -1,0 +1,77 @@
+-- Here is an example of parallel unit tests for a SQL script. Tests are vital to ensure data quality when building a pipeline.
+-- Series tests are harder to troubleshoot, as you cannot quickly locate all the errors (they have to be fixed in script order instead)
+-- I have created a fake table, subscription_sales (sales for subscription customers) to illustrate how parallel tests can be run to get round this.
+
+-- How it works:
+--     Define a series of tests (from the table) to act as unit tests
+--     Create a function to list all failed tests
+--     Run a single query at the end to evaluate all unit tests and raise collected failures via a 'divide by 0' error.
+--     Run teardown process to remove all created UDFS
+
+--Define the series of tests that need to be undertaken to check data quality.
+CREATE OR REPLACE TEMP TABLE subscriptions_tmp_unit_test AS (
+
+    SELECT
+        IFF(
+            cumulative_sessions < 1,
+            'cumulative_sessions is less than 1', NULL
+        ) AS test_result
+    FROM
+        subscription_user_sales
+-- Confirming that every customer who is registered in the database as having made a purchase is recorded for at least one visit to the site.
+
+UNION
+
+    SELECT
+        IFF(
+            joining_date > purchase_date,
+            'member joining_date listed as after any purchases', NULL
+        ) AS test_result
+    FROM
+        subscription_user_sales
+--Confirming that accounts do not have data listed for before they are created
+
+UNION
+
+    SELECT
+        IFF(
+            COUNT(order_id) != COUNT(DISTINCT order_id),
+            'Duplicate order_ids in table', NULL
+        ) AS test_result
+    FROM
+        subscription_user_sales
+--Confirming that orders have not been recorded multiple times
+);
+
+  -- Test function: Define test function to check all test outcomes and list any failed unit tests.
+CREATE OR REPLACE
+    FUNCTION subscriptions_evaluation()
+    RETURNS string AS
+$$
+    SELECT
+        CASE
+            WHEN COUNT(*) != 0
+            THEN 'Subscription_scripts failed because [' || LISTAGG(test_result, ', ') || ']'
+        END AS test_evaluation
+    FROM
+        subscriptions_tmp_unit_test
+    WHERE
+        test_result IS NOT NULL
+$$;
+
+-- Test evaluation: Evaluate all unit tests and raise collected failures via 'div 0' exception
+-- Dividing by 0 will break a lot of pipelines, hence stopping the flow if there are any errors.
+SELECT
+    CASE
+        WHEN COUNT(*) != 0 THEN LISTAGG(test_result, ' & ')/0
+        ELSE 100
+    END AS all_test_result
+FROM (
+    SELECT subscriptions_evaluation() AS test_result
+
+)
+WHERE
+    test_result IS NOT NULL;
+
+-- Teardown: Remove all created UDFs
+DROP FUNCTION IF EXISTS subscriptions_evaluation();
